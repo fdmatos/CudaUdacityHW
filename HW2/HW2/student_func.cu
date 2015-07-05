@@ -256,21 +256,56 @@ void your_gaussian_blur(const uchar4 * const h_inputImageRGBA, uchar4 * const d_
 	const int filterWidth)
 {
 	//TODO: Set reasonable block size (i.e., number of threads per block)
-	float pixelRelation = numRows / numCols;
-	int threadsPerBlock = 512;
-	int rowsPerBlock = ceil(sqrt((float)threadsPerBlock / pixelRelation));
-	int columnsPerBlock = pixelRelation * rowsPerBlock;
-	const dim3 blockSize(rowsPerBlock, columnsPerBlock, 1);
+	float pixelRelation = (float)numRows / (float)numCols;
+	int maxThreadsPerBlock = 512;
+	int numPixels = numRows * numCols;
+	/*A ideia geral das contas que se segue é maximizar o numero de threads executadas em cada bloco,
+	e minimizar o "espaço desperdiçado" (ou seja, a área de blocos potencialmente alocada que não seria
+	usada para processar a imagem, por estar para lá dos limites dela). Minimizando o espaço desperdiçado,
+	os blocos ficam com uma forma (shape) que minimiza o número total de blocos necessário. */
+
+	/*Fazer com que cada linha da grid esteja preenchida o mais exactamente possivel
+	com blocos. Se uma linha tiver menos que 512 pixels, basta 1 bloco para a preencher. Se tiver
+	entre 512 e 1024, precisa de 2; e por aí adiante*/
+	int blocksPerRow = ceil((float)numCols / (float)maxThreadsPerBlock);
+	/*Calcular o tamanho (em x) que cada bloco de uma linha deverá ter, para que esta
+	fique totalmente preenchida (na prática pode acontecer que o ultimo bloco fique um pouco
+	para fora por causa de arredondamentos.*/
+	int blockXSize = ceil((float)numCols / (float)blocksPerRow);
+	/*Calcular o tamanho (em y) que cada bloco terá. Para isso é preciso ter em conta
+	o tamanho dele em x (previamente calculado) e o numero maximo de threads que um bloco 
+	pode ter. Aqui usa-se o operador floor para garantir que blockYSize fica com um valor tal que
+	o bloco não fica com um tamanho que levaria a que tivesse mais do que o numero maximo de threads
+	devido a valores decimais provenientes da divisão. Por exemplo, sem o floor, seria possivel
+	blockYSize * blockXSize = maxThreadsPerBlock + 1.*/
+	int blockYSize = floor((float)maxThreadsPerBlock / (float)blockXSize);
+	/*Com estas operações, consegue-se que os blocos contenham o maior numero de threads possivel, 
+	com a limitação de estarem o mais ajustados possível ao tamanho (em x) da imagem. No fundo,
+	maximiza-se (em x e y) o tamanho de cada bloco tal que o numero de threads dele se aproxime,
+	tanto quanto possivel, do numero maximo de threads (neste caso, maxThreadsPerBlock); no entanto,
+	isto está sujeito a que os blocos enxaixem de forma a minimizar o espaço de cada bloco 
+	que fica para fora da imagem à direita. Inevitavelmente, isto tem como consequência que 
+	haverá espaço a ser deixado para fora em baixo, nos blocos finais.*/
+
+	/*Numero de threads que cada bloco irá efectivamente ter, que dificilmente será igual
+	ao numero maximo.*/
+	int threadsPerBlock = blockXSize * blockYSize;
+
+	/*Numero de blocos necessarios para processar a imagem, que tem que ter em conta o numero
+	de threads que cada bloco tera*/
+	int numberOfBlocks = ceil((float)numPixels / (float)threadsPerBlock);
+
+	const dim3 blockSize(blockXSize, blockYSize, 1);
 
 	//TODO:
 	//Compute correct grid size (i.e., number of blocks per kernel launch)
 	//from the image size and and block size.
-	int numPixels = numRows * numCols;
-	int numberOfBlocks = ceil(numPixels / threadsPerBlock);
-	int numYBlocks = ceil(numCols / columnsPerBlock);
-	int numXBlocks = ceil((float)numberOfBlocks / (float)numYBlocks);
 
-	const dim3 gridSize(numXBlocks, numYBlocks, 1);
+	/*Numero de blocos em cada coluna da grid, calculado tendo em conta o numero total de blocos
+	que sera necessario, e o numero total de blocos que havera em cada linha (calculado previamente).*/
+	int blocksPerColumn = ceil((float)numberOfBlocks / (float)blocksPerRow);
+
+	const dim3 gridSize(blocksPerRow, blocksPerColumn, 1);
 
 
 	//TODO: Launch a kernel for separating the RGBA image into different color channels
