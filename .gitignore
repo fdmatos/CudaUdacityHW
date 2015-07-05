@@ -67,3 +67,5 @@ build
 bin
 debug
 
+*.sdf
+*.opensdf
