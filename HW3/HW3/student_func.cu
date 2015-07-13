@@ -81,6 +81,16 @@
 
 #include "utils.h"
 
+__global__ void reduce_Minimum(const float* const d_logLuminance,
+	int numberOfPixels,
+	float* d_blockMinimum,
+	float* d_intermediateMinimum);
+
+__global__ void reduce_Maximum(const float* const d_logLuminance,
+	int numberOfPixels,
+	float* d_blockMinimum,
+	float* d_intermediateMinimum);
+
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
                                   float &min_logLum,
@@ -100,5 +110,111 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
        the cumulative distribution of luminance values (this should go in the
        incoming d_cdf pointer which already has been allocated for you)       */
 
+	int numberOfPixels = numRows*numCols;
+	int threadsPerBlock = 1024;
+	int numberOfBlocks = (numberOfPixels / threadsPerBlock) + 1;
+	float* d_intermediateMinimum;
+	float* d_blockMinimum;
+	float* d_intermediateMaximum;
+	float* d_blockMaximum;
+	/*float* d_min_logLum = &min_logLum;*/
+	checkCudaErrors(cudaMalloc(&d_blockMinimum, numberOfBlocks*sizeof(float)));
+	checkCudaErrors(cudaMalloc(&d_intermediateMinimum, ((numberOfPixels / 2) + 1)*sizeof(float)));
+	/*checkCudaErrors(cudaMalloc(&d_min_logLum, sizeof(float)));*/
+	checkCudaErrors(cudaMalloc(&d_blockMaximum, numberOfBlocks*sizeof(float)));
+	checkCudaErrors(cudaMalloc(&d_intermediateMaximum, ((numberOfPixels / 2) + 1)*sizeof(float)));
+
+	reduce_Minimum<<<numberOfBlocks, threadsPerBlock >>>(d_logLuminance, 
+															numberOfPixels, 
+															d_blockMinimum, 
+															d_intermediateMinimum);
+
+	reduce_Maximum << <numberOfBlocks, threadsPerBlock >> >(d_logLuminance,
+		numberOfPixels,
+		d_blockMaximum,
+		d_intermediateMaximum);
+	/*reduce_Minimum<<<1, threadsPerBlock >>>(d_intermediateMinimum,
+															min_logLum,
+															numberOfPixels,
+															d_blockMinimum,
+															d_intermediateMinimum);*/
+	//min_logLum = d_blockMinimum[0];
+	reduce_Maximum << <1, threadsPerBlock >> >(d_logLuminance,
+		numberOfPixels,
+		d_blockMaximum,
+		d_intermediateMaximum);
+
+	float* h_blockMinimum = (float*)malloc(numberOfBlocks*sizeof(float));
+	checkCudaErrors(cudaMemcpy(h_blockMinimum, d_blockMinimum, numberOfBlocks*sizeof(float), cudaMemcpyDeviceToHost));
+	float* h_blockMaximum = (float*)malloc(numberOfBlocks*sizeof(float));
+	checkCudaErrors(cudaMemcpy(h_blockMaximum, d_blockMinimum, numberOfBlocks*sizeof(float), cudaMemcpyDeviceToHost));
+	min_logLum = h_blockMinimum[0];
+	max_logLum = h_blockMaximum[0];
+	checkCudaErrors(cudaFree(d_blockMinimum));
+	checkCudaErrors(cudaFree(d_intermediateMinimum));
+	
+	/*checkCudaErrors(cudaFree(d_min_logLum));*/
+
+	return;
+
+
+}
+
+__global__ void reduce_Minimum(const float* const d_logLuminance, 
+								int numberOfPixels,
+								float* d_blockMinimum,
+								float* d_intermediateMinimum){
+
+	int vectorX = blockIdx.x * blockDim.x + threadIdx.x;
+	if (vectorX > numberOfPixels){
+		return;
+	}
+
+	int threadIndex = threadIdx.x;
+	for (int s = blockDim.x / 2; s > 0; s >>= 1){
+		if (threadIndex < s){
+			int k = fminf(d_logLuminance[vectorX], d_logLuminance[vectorX + s]);
+			d_intermediateMinimum[vectorX] = k;
+		}
+		__syncthreads();
+	}
+
+	
+	
+	if (threadIndex == 0){
+		d_blockMinimum[blockIdx.x] = d_intermediateMinimum[vectorX];
+		//min_logLum = d_intermediateMinimum[vectorX];
+	}
+
+	return;
+
+}
+
+
+__global__ void reduce_Maximum(const float* const d_logLuminance,
+	int numberOfPixels,
+	float* d_blockMaximum,
+	float* d_intermediateMaximum){
+
+	int vectorX = blockIdx.x * blockDim.x + threadIdx.x;
+	if (vectorX > numberOfPixels){
+		return;
+	}
+
+	int threadIndex = threadIdx.x;
+	for (int s = blockDim.x / 2; s > 0; s >>= 1){
+		if (threadIndex < s){
+			int k = fmaxf(d_logLuminance[vectorX], d_logLuminance[vectorX + s]);
+			d_intermediateMaximum[vectorX] = k;
+		}
+		__syncthreads();
+	}
+
+	if (threadIndex == 0){
+		d_blockMaximum[blockIdx.x] = d_intermediateMaximum[vectorX];
+		//min_logLum = d_intermediateMinimum[vectorX];
+	}
+
+	return;
 
 }
