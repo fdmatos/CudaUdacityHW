@@ -80,15 +80,25 @@
 */
 
 #include "utils.h"
+#include <fstream>
+#include <iostream>
+using namespace std;
 
-__global__ void reduce_Minimum(const float* const d_logLuminance,
-	int numberOfPixels,
-	float* d_blockMinimum,
-	float* d_intermediateMinimum);
+__global__ void reduce_Minimum(float* d_in,
+	int d_inSize,
+	int numberOfBlocks,
+	float* d_out);
 
 __global__ void reduce_Maximum(float* d_in,
-	int numberOfPixels,
-	float* d_blockMinimum);
+	int d_inSize,
+	int numberOfBlocks,
+	float* d_out);
+
+__global__ void histogram_SeparateBuckets(float* d_in, int* d_threadBucketMatrix,
+	int numberOfElements, int elementsPerThread, int pitch,
+	float lumMin, float lumRange, int numBins);
+
+__global__ void reduce_SumBuckets(int* d_in, int* d_out, int elementsToProcess);
 
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
@@ -123,22 +133,25 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	checkCudaErrors(cudaMalloc(&d_blockMinimum, numberOfBlocks*sizeof(float)));
 	checkCudaErrors(cudaMalloc(&d_blockMaximum, numberOfBlocks*sizeof(float)));
 
-	//reduce_Minimum<<<numberOfBlocks, threadsPerBlock >>>(d_logLuminance, 
-	//														numberOfPixels, 
-	//														d_blockMinimum, 
-	//														d_intermediateMinimum);
+	reduce_Minimum << <numberOfBlocks, threadsPerBlock >> >(d_in,
+															numberOfPixels, 
+															numberOfBlocks, 
+															d_blockMinimum);
 
 	reduce_Maximum << <numberOfBlocks, threadsPerBlock >> >(d_in,
-		numberOfPixels,
-		d_blockMaximum);
-	/*reduce_Minimum<<<1, threadsPerBlock >>>(d_intermediateMinimum,
-															min_logLum,
 															numberOfPixels,
-															d_blockMinimum,
-															d_intermediateMinimum);*/
+															numberOfBlocks,
+															d_blockMaximum);
+
+	reduce_Minimum << <1, threadsPerBlock >> >(d_blockMinimum,
+															numberOfBlocks,
+															1,
+															d_blockMinimum);
+
 	reduce_Maximum << <1, threadsPerBlock >> >(d_blockMaximum,
-		numberOfBlocks,
-		d_blockMaximum);
+															numberOfBlocks,
+															1,
+															d_blockMaximum);
 
 	float* h_blockMinimum = (float*)malloc(numberOfBlocks*sizeof(float));
 	checkCudaErrors(cudaMemcpy(h_blockMinimum, d_blockMinimum, numberOfBlocks*sizeof(float), cudaMemcpyDeviceToHost));
@@ -148,76 +161,262 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	max_logLum = h_blockMaximum[0];
 	checkCudaErrors(cudaFree(d_blockMinimum));
 	checkCudaErrors(cudaFree(d_blockMaximum));
-	checkCudaErrors(cudaFree(d_in));
+	
 	free(h_blockMaximum);
 	free(h_blockMinimum);
-	
-	/*checkCudaErrors(cudaFree(d_min_logLum));*/
 
+	int* d_threadBucketMatrix;
+	size_t pitch;
+	int pixelsPerThread = numberOfPixels / threadsPerBlock + 1;
+	int width = threadsPerBlock*sizeof(int);
+	int length = numBins*sizeof(int);
+	
+	checkCudaErrors(cudaMallocPitch(&d_threadBucketMatrix, &pitch, width, length));
+	float lumRange = max_logLum - min_logLum;
+
+	////////quantos pixels foram calculados pela thread
+	/*int *d_test;
+	int somatest = 0;*//*
+	checkCudaErrors(cudaMalloc(&d_test, threadsPerBlock*sizeof(int)));*/
+
+	histogram_SeparateBuckets << <1, threadsPerBlock >> >(d_in, d_threadBucketMatrix, numberOfPixels,
+		pixelsPerThread, pitch, min_logLum, lumRange, numBins);
+
+	/*int* h_test = (int*)malloc(threadsPerBlock * sizeof(int));
+	checkCudaErrors(cudaMemcpy(h_test, d_test, threadsPerBlock*sizeof(int), cudaMemcpyDeviceToHost));
+	ofstream testout("anothertest.txt");
+	
+	for (int k = 0; k < threadsPerBlock; k++){
+		testout << h_test[k];
+		somatest+=h_test[k];
+	}*/
+
+
+	int** h_threadBucketMatrix = (int**)malloc(numBins*sizeof(int*));
+	for (int k = 0; k < numBins; k++){
+		h_threadBucketMatrix[k] = (int*)malloc(threadsPerBlock*sizeof(int));
+	}
+	for (int k = 0; k < numBins; k++){
+		checkCudaErrors(cudaMemcpy(h_threadBucketMatrix[k], (int*)((char*)d_threadBucketMatrix + k * pitch), threadsPerBlock*sizeof(int), cudaMemcpyDeviceToHost));
+	}
+
+	ofstream fout("text.txt");
+	int summ = 0;
+	if (fout.is_open()){
+		for (int i = 0; i < numBins; i++){
+			for (int k = 0; k < threadsPerBlock; k++){
+				fout << (h_threadBucketMatrix[i][k]);
+				summ += h_threadBucketMatrix[i][k];
+			}
+			fout << "\n";
+		}
+	}
+
+	int* h_buckets = (int*)malloc(numBins*sizeof(int));
+	int* d_out;
+	int* d_bucketValues;
+	checkCudaErrors(cudaMalloc(&d_bucketValues, threadsPerBlock*sizeof(int)));
+	checkCudaErrors(cudaMalloc(&d_out, sizeof(int)));
+	
+	for (int k = 0; k < numBins; k++){
+		checkCudaErrors(cudaMemcpy(d_bucketValues, h_threadBucketMatrix[k], threadsPerBlock*sizeof(int), cudaMemcpyHostToDevice));
+		//o numero de elementos a processar nesta funçao devia ser o numero de buckets,
+		// e nao o numero de threads, que por coincidencia é igual. refactorizar. 
+		reduce_SumBuckets << <1, threadsPerBlock >> > (d_bucketValues, d_out, threadsPerBlock);
+		checkCudaErrors(cudaMemcpy(&h_buckets[k], d_out, sizeof(int), cudaMemcpyDeviceToHost));
+	
+	}
+
+	
+	int sum = 0;
+	if (fout.is_open()){
+		for (int i = 0; i < numBins; i++){
+			fout << h_buckets[i];
+			fout << '-';
+			sum += h_buckets[i];
+		}
+		fout << "\n"; fout << sum;
+	}
+
+	//fazer scan exclusivo de h_buckets
+
+	free(h_buckets);
+	cudaFree(d_bucketValues);
+	checkCudaErrors(cudaFree(d_in));
+	checkCudaErrors(cudaFree(d_out));
+	checkCudaErrors(cudaFree(d_threadBucketMatrix));
+	for (int i = 0; i < numBins; i++){
+		free(h_threadBucketMatrix[i]);
+	}
+	free(h_threadBucketMatrix);
 	return;
 
 
 }
 
-__global__ void reduce_Minimum(const float* const d_logLuminance, 
-								int numberOfPixels,
-								float* d_blockMinimum,
-								float* d_intermediateMinimum){
 
-	int vectorX = blockIdx.x * blockDim.x + threadIdx.x;
-	if (vectorX > numberOfPixels){
+__global__ void exclusiveScan(int* d_in, int* d_out, int* d_intermediate, int elementsToProcess){
+	
+	int tid = threadIdx.x + blockIdx.x + blockDim.x;
+	if (tid > elementsToProcess){
 		return;
 	}
 
-	int threadIndex = threadIdx.x;
-	for (int s = blockDim.x / 2; s > 0; s >>= 1){
-		if (threadIndex < s){
-			int k = fminf(d_logLuminance[vectorX], d_logLuminance[vectorX + s]);
-			d_intermediateMinimum[vectorX] = k;
+	//fase de reduce. dintermediate tem que entrar aqui ja igual a d_in. 
+	for (int s = -1; s <= elementsToProcess / 2; s = s * 2){
+		if (){
+			d_intermediate[tid] = d_intermediate[tid] + d_intermediate[tid + s];
 		}
 		__syncthreads();
 	}
 
+	//fase de downsweep
+	for ();
+}
+
+//Esta função dá asneira se o numero de buckets (o numero de elementos a processar) for maior do que
+//o numero de threads definidas por bloco (1024). refactorizar. 
+__global__ void reduce_SumBuckets(int* d_in, int* d_out, int elementsToProcess){
 	
+	int tid = threadIdx.x + blockIdx.x * blockDim.x;
+	if (tid > elementsToProcess){
+		return;	
+	}
+
+	for (int s = elementsToProcess/2; s > 0; s = s / 2){
+		if (threadIdx.x < s){
+			d_in[tid] = d_in[tid] + d_in[tid + s];
+		}
+		__syncthreads();
+	}
+
+	if (threadIdx.x == 0){
+		*d_out = d_in[0];
+	}
+
+}
+
+__global__ void histogram_SeparateBuckets(float* d_in, int* d_threadBucketMatrix, 
+											int numberOfElements, int elementsPerThread, int pitch,
+											float lumMin, float lumRange, int numBins){
 	
+
+	int pixelToRead;
+	int threadX = threadIdx.x;
+	int* gridAddress;
+
+	for (int i = 0; i < numBins; i++){
+		gridAddress = (int*)((char*)d_threadBucketMatrix + i * pitch) + threadX;
+		*gridAddress = 0;
+	}
+	int bucket;
+	float pixelValue;
+	int test = 0;
+	for (int i = 0; i < elementsPerThread; i++){
+		pixelToRead = threadX * elementsPerThread + i;
+		if (pixelToRead >= numberOfElements){
+			//d_test[threadX] = i;
+			return;
+		}
+		pixelValue = d_in[pixelToRead];
+		bucket = floor((((float)(pixelValue - lumMin) / lumRange) * numBins));
+		/////
+		if (bucket > 1023){
+			bucket = 1023;
+		}
+		gridAddress = (int*)((char*)d_threadBucketMatrix + bucket * pitch) + threadX;
+		*gridAddress = *gridAddress + 1;
+		//test = i;
+	}
+	//d_test[threadX] = test;
+	return;
+}
+
+
+
+__global__ void reduce_Minimum(float* d_in,
+	int d_inSize,
+	int numberOfBlocks,
+	float* d_out)
+{
+	int threadsPerBlock = blockDim.x;
+	int thisBlockId = blockIdx.x;
+	int threadIndex = threadIdx.x;
+	int vectorX = thisBlockId * threadsPerBlock + threadIndex;
+	if (vectorX > d_inSize){
+		return;
+	}
+
+	int elementsToProcess;
+	if (thisBlockId + 1 == numberOfBlocks){
+		elementsToProcess = d_inSize % threadsPerBlock;
+	}
+	else{
+		elementsToProcess = threadsPerBlock;
+	}
+
+	int odd = 0;
+	for (int s = elementsToProcess / 2; s > 0; s = s / 2){
+		if (threadIndex < s){
+			odd = elementsToProcess % 2;
+			d_in[vectorX] = fminf(d_in[vectorX], d_in[vectorX + s + odd]);
+			elementsToProcess -= s;
+			if (s % 2 && elementsToProcess == 2){
+				s = 2;
+			}
+
+		}
+		__syncthreads();
+	}
+
 	if (threadIndex == 0){
-		d_blockMinimum[blockIdx.x] = d_intermediateMinimum[vectorX];
-		
-		//min_logLum = d_intermediateMinimum[vectorX];
+		d_out[thisBlockId] = d_in[vectorX];
 	}
 
 	return;
-
 }
 
 
 __global__ void reduce_Maximum(float* d_in,
-	int numberOfPixels,
-	float* d_blockMaximum)
+	int d_inSize,
+	int numberOfBlocks,
+	float* d_out)
 {
-
-	int vectorX = blockIdx.x * blockDim.x + threadIdx.x;
-	if (vectorX > numberOfPixels){
+	int threadsPerBlock = blockDim.x;
+	int thisBlockId = blockIdx.x;
+	int threadIndex = threadIdx.x;
+	int vectorX = thisBlockId * threadsPerBlock + threadIndex;
+	if (vectorX > d_inSize){
 		return;
 	}
+	
+	int elementsToProcess;
+	if (thisBlockId + 1 == numberOfBlocks){
+		elementsToProcess = d_inSize % threadsPerBlock;
+	}
+	else{
+		elementsToProcess = threadsPerBlock;
+	}
 
-	int threadIndex = threadIdx.x;
-	for (int s = blockDim.x / 2; s > 0; s >>= 1){
+	int odd = 0;
+	for (int s = elementsToProcess / 2; s > 0; s = s/2){
 		if (threadIndex < s){
-			float k = fmaxf(d_in[vectorX], d_in[vectorX + s]);
-			d_in[vectorX] = k;
+			odd = elementsToProcess % 2;
+			d_in[vectorX] = fmaxf(d_in[vectorX], d_in[vectorX + s + odd]);
+			elementsToProcess -= s;
+			if (s % 2 && elementsToProcess == 2){
+				s = 2;
+			}
 			
 		}
 		__syncthreads();
 	}
 
 	if (threadIndex == 0){
-		d_blockMaximum[blockIdx.x] = d_in[vectorX];
-		if (vectorX == 0){
-			int k = 3;
-		}
+		d_out[thisBlockId] = d_in[vectorX];
 	}
 
 	return;
-
 }
+
+
