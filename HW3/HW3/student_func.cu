@@ -94,11 +94,13 @@ __global__ void reduce_Maximum(float* d_in,
 	int numberOfBlocks,
 	float* d_out);
 
-__global__ void histogram_SeparateBuckets(float* d_in, int* d_threadBucketMatrix,
+__global__ void histogram_SeparateBuckets(const float* const d_in, int* d_threadBucketMatrix,
 	int numberOfElements, int elementsPerThread, int pitch,
 	float lumMin, float lumRange, int numBins);
 
 __global__ void reduce_SumBuckets(int* d_in, int* d_out, int elementsToProcess);
+
+__global__ void exclusiveScan(unsigned int* d_intermediate, int elementsToProcess);
 
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
@@ -179,7 +181,7 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	int somatest = 0;*//*
 	checkCudaErrors(cudaMalloc(&d_test, threadsPerBlock*sizeof(int)));*/
 
-	histogram_SeparateBuckets << <1, threadsPerBlock >> >(d_in, d_threadBucketMatrix, numberOfPixels,
+	histogram_SeparateBuckets << <1, threadsPerBlock >> >(d_logLuminance, d_threadBucketMatrix, numberOfPixels,
 		pixelsPerThread, pitch, min_logLum, lumRange, numBins);
 
 	/*int* h_test = (int*)malloc(threadsPerBlock * sizeof(int));
@@ -200,8 +202,8 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 		checkCudaErrors(cudaMemcpy(h_threadBucketMatrix[k], (int*)((char*)d_threadBucketMatrix + k * pitch), threadsPerBlock*sizeof(int), cudaMemcpyDeviceToHost));
 	}
 
-	ofstream fout("text.txt");
-	int summ = 0;
+	
+	/*int summ = 0;
 	if (fout.is_open()){
 		for (int i = 0; i < numBins; i++){
 			for (int k = 0; k < threadsPerBlock; k++){
@@ -210,7 +212,7 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 			}
 			fout << "\n";
 		}
-	}
+	}*/
 
 	int* h_buckets = (int*)malloc(numBins*sizeof(int));
 	int* d_out;
@@ -228,50 +230,92 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	}
 
 	
-	int sum = 0;
-	if (fout.is_open()){
-		for (int i = 0; i < numBins; i++){
-			fout << h_buckets[i];
-			fout << '-';
-			sum += h_buckets[i];
-		}
-		fout << "\n"; fout << sum;
-	}
+	//int sum = 0;
+	//if (fout.is_open()){
+	//	for (int i = 0; i < numBins; i++){
+	//		fout << h_buckets[i];
+	//		fout << '-';
+	//		sum += h_buckets[i];
+	//	}
+	//	fout << "\n"; fout << sum;
+	//}
 
 	//fazer scan exclusivo de h_buckets
 
+	unsigned int * d_intermediate;
+	checkCudaErrors(cudaMalloc(&d_intermediate, numBins*sizeof(int)));
+	checkCudaErrors(cudaMemcpy(d_intermediate, h_buckets, numBins*sizeof(int), cudaMemcpyHostToDevice));
+	/*int *d_test;
+	checkCudaErrors(cudaMalloc(&d_test, sizeof(int)));*/
+	exclusiveScan << <1, threadsPerBlock >> >(d_intermediate, numBins);
+	/*int *h_test = (int*)malloc(sizeof(int));
+	checkCudaErrors(cudaMemcpy(h_test, d_test, sizeof(int), cudaMemcpyDeviceToHost));*/
+	checkCudaErrors(cudaMemcpy(d_cdf, d_intermediate, numBins * sizeof(int), cudaMemcpyDeviceToDevice));
+	checkCudaErrors(cudaMemcpy(h_buckets, d_intermediate, numBins*sizeof(int), cudaMemcpyDeviceToHost));
+
+	ofstream fout("text.txt");
+	for (int k = 0; k < numBins; k++){
+		fout << h_buckets[k];
+		fout << '-';
+	}
+	fout << '\n';
+
+//	int test = *h_test;
+//	free(h_test);
 	free(h_buckets);
-	cudaFree(d_bucketValues);
+	checkCudaErrors(cudaFree(d_bucketValues));
 	checkCudaErrors(cudaFree(d_in));
 	checkCudaErrors(cudaFree(d_out));
 	checkCudaErrors(cudaFree(d_threadBucketMatrix));
 	for (int i = 0; i < numBins; i++){
 		free(h_threadBucketMatrix[i]);
 	}
-	free(h_threadBucketMatrix);
+	free(h_threadBucketMatrix);/*
+	checkCudaErrors(cudaFree(d_test));*/
+	checkCudaErrors(cudaFree(d_intermediate));
 	return;
 
 
 }
 
 
-__global__ void exclusiveScan(int* d_in, int* d_out, int* d_intermediate, int elementsToProcess){
+__global__ void exclusiveScan(unsigned int* d_intermediate, int elementsToProcess){
 	
-	int tid = threadIdx.x + blockIdx.x + blockDim.x;
+	int threadX = threadIdx.x;
+	int tid = threadX + blockIdx.x * blockDim.x;
 	if (tid > elementsToProcess){
 		return;
 	}
-
+	
+	
 	//fase de reduce. dintermediate tem que entrar aqui ja igual a d_in. 
-	for (int s = -1; s <= elementsToProcess / 2; s = s * 2){
-		if (){
-			d_intermediate[tid] = d_intermediate[tid] + d_intermediate[tid + s];
+	for (int s = 1, mod = 2; s <= elementsToProcess / 2; s = s * 2, mod = mod * 2){
+		if ((threadX + 1) % mod == 0){
+			d_intermediate[tid] = d_intermediate[tid] + d_intermediate[tid - s];
 		}
 		__syncthreads();
 	}
 
+	if (threadIdx.x == 1023){
+		d_intermediate[1023] = 0;
+	}
+
+	__syncthreads();
 	//fase de downsweep
-	for ();
+	int auxiliary;
+	for (int s = elementsToProcess / 2, mod = elementsToProcess; s > 0; s = s / 2, mod = mod / 2){
+		if ((threadX + 1) % mod == 0){
+			auxiliary = d_intermediate[tid - s];
+			d_intermediate[tid - s] = d_intermediate[tid];
+			d_intermediate[tid] = d_intermediate[tid] + auxiliary;
+		}
+		__syncthreads();
+	}
+
+	//if (threadIdx.x == 1023){
+	//	*d_out = d_intermediate[1023];
+	//}
+	
 }
 
 //Esta função dá asneira se o numero de buckets (o numero de elementos a processar) for maior do que
@@ -296,7 +340,7 @@ __global__ void reduce_SumBuckets(int* d_in, int* d_out, int elementsToProcess){
 
 }
 
-__global__ void histogram_SeparateBuckets(float* d_in, int* d_threadBucketMatrix, 
+__global__ void histogram_SeparateBuckets(const float* const d_in, int* d_threadBucketMatrix, 
 											int numberOfElements, int elementsPerThread, int pitch,
 											float lumMin, float lumRange, int numBins){
 	
@@ -309,9 +353,9 @@ __global__ void histogram_SeparateBuckets(float* d_in, int* d_threadBucketMatrix
 		gridAddress = (int*)((char*)d_threadBucketMatrix + i * pitch) + threadX;
 		*gridAddress = 0;
 	}
-	int bucket;
+	unsigned int bucket;
 	float pixelValue;
-	int test = 0;
+//	int test = 0;
 	for (int i = 0; i < elementsPerThread; i++){
 		pixelToRead = threadX * elementsPerThread + i;
 		if (pixelToRead >= numberOfElements){
@@ -319,11 +363,13 @@ __global__ void histogram_SeparateBuckets(float* d_in, int* d_threadBucketMatrix
 			return;
 		}
 		pixelValue = d_in[pixelToRead];
-		bucket = floor((((float)(pixelValue - lumMin) / lumRange) * numBins));
+		//bucket = floor((((float)(pixelValue - lumMin) / lumRange) * numBins));
 		/////
-		if (bucket > 1023){
+		bucket = fminf(((unsigned int)(numBins - 1)), (unsigned int)((pixelValue - lumMin) / lumRange * numBins));
+
+		/*if (bucket > 1023){
 			bucket = 1023;
-		}
+		}*/
 		gridAddress = (int*)((char*)d_threadBucketMatrix + bucket * pitch) + threadX;
 		*gridAddress = *gridAddress + 1;
 		//test = i;
