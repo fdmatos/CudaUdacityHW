@@ -100,7 +100,7 @@ __global__ void histogram_SeparateBuckets(const float* const d_in, int* d_thread
 
 __global__ void reduce_SumBuckets(int* d_in, int* d_out, int elementsToProcess);
 
-__global__ void exclusiveScan(unsigned int* d_intermediate, int elementsToProcess);
+__global__ void exclusiveScan(unsigned int* d_in, int elementsToProcess);
 
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
@@ -135,22 +135,22 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	checkCudaErrors(cudaMalloc(&d_blockMinimum, numberOfBlocks*sizeof(float)));
 	checkCudaErrors(cudaMalloc(&d_blockMaximum, numberOfBlocks*sizeof(float)));
 
-	reduce_Minimum << <numberOfBlocks, threadsPerBlock >> >(d_in,
+	reduce_Minimum << <numberOfBlocks, threadsPerBlock, threadsPerBlock*sizeof(float) >> >(d_in,
 															numberOfPixels, 
 															numberOfBlocks, 
 															d_blockMinimum);
 
-	reduce_Maximum << <numberOfBlocks, threadsPerBlock >> >(d_in,
+	reduce_Maximum << <numberOfBlocks, threadsPerBlock, threadsPerBlock*sizeof(float) >> >(d_in,
 															numberOfPixels,
 															numberOfBlocks,
 															d_blockMaximum);
 
-	reduce_Minimum << <1, threadsPerBlock >> >(d_blockMinimum,
+	reduce_Minimum << <1, threadsPerBlock, threadsPerBlock*sizeof(float) >> >(d_blockMinimum,
 															numberOfBlocks,
 															1,
 															d_blockMinimum);
 
-	reduce_Maximum << <1, threadsPerBlock >> >(d_blockMaximum,
+	reduce_Maximum << <1, threadsPerBlock, threadsPerBlock*sizeof(float) >> >(d_blockMaximum,
 															numberOfBlocks,
 															1,
 															d_blockMaximum);
@@ -176,22 +176,10 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	checkCudaErrors(cudaMallocPitch(&d_threadBucketMatrix, &pitch, width, length));
 	float lumRange = max_logLum - min_logLum;
 
-	////////quantos pixels foram calculados pela thread
-	/*int *d_test;
-	int somatest = 0;*//*
-	checkCudaErrors(cudaMalloc(&d_test, threadsPerBlock*sizeof(int)));*/
-
-	histogram_SeparateBuckets << <1, threadsPerBlock >> >(d_logLuminance, d_threadBucketMatrix, numberOfPixels,
+	//, numberOfPixels*sizeof(float)
+	histogram_SeparateBuckets << <1, threadsPerBlock>> >
+		(d_logLuminance, d_threadBucketMatrix, numberOfPixels,
 		pixelsPerThread, pitch, min_logLum, lumRange, numBins);
-
-	/*int* h_test = (int*)malloc(threadsPerBlock * sizeof(int));
-	checkCudaErrors(cudaMemcpy(h_test, d_test, threadsPerBlock*sizeof(int), cudaMemcpyDeviceToHost));
-	ofstream testout("anothertest.txt");
-	
-	for (int k = 0; k < threadsPerBlock; k++){
-		testout << h_test[k];
-		somatest+=h_test[k];
-	}*/
 
 
 	int** h_threadBucketMatrix = (int**)malloc(numBins*sizeof(int*));
@@ -202,17 +190,6 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 		checkCudaErrors(cudaMemcpy(h_threadBucketMatrix[k], (int*)((char*)d_threadBucketMatrix + k * pitch), threadsPerBlock*sizeof(int), cudaMemcpyDeviceToHost));
 	}
 
-	
-	/*int summ = 0;
-	if (fout.is_open()){
-		for (int i = 0; i < numBins; i++){
-			for (int k = 0; k < threadsPerBlock; k++){
-				fout << (h_threadBucketMatrix[i][k]);
-				summ += h_threadBucketMatrix[i][k];
-			}
-			fout << "\n";
-		}
-	}*/
 
 	int* h_buckets = (int*)malloc(numBins*sizeof(int));
 	int* d_out;
@@ -224,44 +201,17 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 		checkCudaErrors(cudaMemcpy(d_bucketValues, h_threadBucketMatrix[k], threadsPerBlock*sizeof(int), cudaMemcpyHostToDevice));
 		//o numero de elementos a processar nesta funçao devia ser o numero de buckets,
 		// e nao o numero de threads, que por coincidencia é igual. refactorizar. 
-		reduce_SumBuckets << <1, threadsPerBlock >> > (d_bucketValues, d_out, threadsPerBlock);
+		reduce_SumBuckets << <1, threadsPerBlock, sizeof(int)*numBins >> > (d_bucketValues, d_out, threadsPerBlock);
 		checkCudaErrors(cudaMemcpy(&h_buckets[k], d_out, sizeof(int), cudaMemcpyDeviceToHost));
 	
 	}
 
-	
-	//int sum = 0;
-	//if (fout.is_open()){
-	//	for (int i = 0; i < numBins; i++){
-	//		fout << h_buckets[i];
-	//		fout << '-';
-	//		sum += h_buckets[i];
-	//	}
-	//	fout << "\n"; fout << sum;
-	//}
+	unsigned int * d_exclusiveScan_in;
+	checkCudaErrors(cudaMalloc(&d_exclusiveScan_in, numBins*sizeof(int)));
+	checkCudaErrors(cudaMemcpy(d_exclusiveScan_in, h_buckets, numBins*sizeof(int), cudaMemcpyHostToDevice));
+	exclusiveScan << <1, threadsPerBlock, numBins * sizeof(unsigned int) >> >(d_exclusiveScan_in, numBins);
+	checkCudaErrors(cudaMemcpy(d_cdf, d_exclusiveScan_in, numBins * sizeof(int), cudaMemcpyDeviceToDevice));
 
-	//fazer scan exclusivo de h_buckets
-
-	unsigned int * d_intermediate;
-	checkCudaErrors(cudaMalloc(&d_intermediate, numBins*sizeof(int)));
-	checkCudaErrors(cudaMemcpy(d_intermediate, h_buckets, numBins*sizeof(int), cudaMemcpyHostToDevice));
-	/*int *d_test;
-	checkCudaErrors(cudaMalloc(&d_test, sizeof(int)));*/
-	exclusiveScan << <1, threadsPerBlock >> >(d_intermediate, numBins);
-	/*int *h_test = (int*)malloc(sizeof(int));
-	checkCudaErrors(cudaMemcpy(h_test, d_test, sizeof(int), cudaMemcpyDeviceToHost));*/
-	checkCudaErrors(cudaMemcpy(d_cdf, d_intermediate, numBins * sizeof(int), cudaMemcpyDeviceToDevice));
-	checkCudaErrors(cudaMemcpy(h_buckets, d_intermediate, numBins*sizeof(int), cudaMemcpyDeviceToHost));
-
-	ofstream fout("text.txt");
-	for (int k = 0; k < numBins; k++){
-		fout << h_buckets[k];
-		fout << '-';
-	}
-	fout << '\n';
-
-//	int test = *h_test;
-//	free(h_test);
 	free(h_buckets);
 	checkCudaErrors(cudaFree(d_bucketValues));
 	checkCudaErrors(cudaFree(d_in));
@@ -270,34 +220,37 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	for (int i = 0; i < numBins; i++){
 		free(h_threadBucketMatrix[i]);
 	}
-	free(h_threadBucketMatrix);/*
-	checkCudaErrors(cudaFree(d_test));*/
-	checkCudaErrors(cudaFree(d_intermediate));
+	free(h_threadBucketMatrix);
+	checkCudaErrors(cudaFree(d_exclusiveScan_in));
 	return;
 
 
 }
 
 
-__global__ void exclusiveScan(unsigned int* d_intermediate, int elementsToProcess){
+__global__ void exclusiveScan(unsigned int* d_in, int elementsToProcess){
 	
+	extern __shared__ unsigned int d_intermediate_local[];
+
 	int threadX = threadIdx.x;
 	int tid = threadX + blockIdx.x * blockDim.x;
 	if (tid > elementsToProcess){
 		return;
 	}
 	
+	d_intermediate_local[threadX] = d_in[tid];
+	syncthreads();
 	
 	//fase de reduce. dintermediate tem que entrar aqui ja igual a d_in. 
 	for (int s = 1, mod = 2; s <= elementsToProcess / 2; s = s * 2, mod = mod * 2){
 		if ((threadX + 1) % mod == 0){
-			d_intermediate[tid] = d_intermediate[tid] + d_intermediate[tid - s];
+			d_intermediate_local[tid] = d_intermediate_local[tid] + d_intermediate_local[tid - s];
 		}
 		__syncthreads();
 	}
 
 	if (threadIdx.x == 1023){
-		d_intermediate[1023] = 0;
+		d_intermediate_local[1023] = 0;
 	}
 
 	__syncthreads();
@@ -305,16 +258,16 @@ __global__ void exclusiveScan(unsigned int* d_intermediate, int elementsToProces
 	int auxiliary;
 	for (int s = elementsToProcess / 2, mod = elementsToProcess; s > 0; s = s / 2, mod = mod / 2){
 		if ((threadX + 1) % mod == 0){
-			auxiliary = d_intermediate[tid - s];
-			d_intermediate[tid - s] = d_intermediate[tid];
-			d_intermediate[tid] = d_intermediate[tid] + auxiliary;
+			auxiliary = d_intermediate_local[tid - s];
+			d_intermediate_local[tid - s] = d_intermediate_local[tid];
+			d_intermediate_local[tid] = d_intermediate_local[tid] + auxiliary;
 		}
 		__syncthreads();
 	}
 
-	//if (threadIdx.x == 1023){
-	//	*d_out = d_intermediate[1023];
-	//}
+	d_in[tid] = d_intermediate_local[threadX];
+	__syncthreads();
+	return;
 	
 }
 
@@ -322,20 +275,25 @@ __global__ void exclusiveScan(unsigned int* d_intermediate, int elementsToProces
 //o numero de threads definidas por bloco (1024). refactorizar. 
 __global__ void reduce_SumBuckets(int* d_in, int* d_out, int elementsToProcess){
 	
+	extern __shared__ float d_in_local[];
+
 	int tid = threadIdx.x + blockIdx.x * blockDim.x;
 	if (tid > elementsToProcess){
 		return;	
 	}
 
+	d_in_local[threadIdx.x] = d_in[tid];
+	__syncthreads();
+
 	for (int s = elementsToProcess/2; s > 0; s = s / 2){
 		if (threadIdx.x < s){
-			d_in[tid] = d_in[tid] + d_in[tid + s];
+			d_in_local[tid] = d_in_local[tid] + d_in_local[tid + s];
 		}
 		__syncthreads();
 	}
 
 	if (threadIdx.x == 0){
-		*d_out = d_in[0];
+		*d_out = d_in_local[0];
 	}
 
 }
@@ -343,11 +301,25 @@ __global__ void reduce_SumBuckets(int* d_in, int* d_out, int elementsToProcess){
 __global__ void histogram_SeparateBuckets(const float* const d_in, int* d_threadBucketMatrix, 
 											int numberOfElements, int elementsPerThread, int pitch,
 											float lumMin, float lumRange, int numBins){
-	
-
+	//extern __shared__ float d_in_local[];
 	int pixelToRead;
 	int threadX = threadIdx.x;
 	int* gridAddress;
+	int tid = threadX + blockDim.x * blockIdx.x;
+
+	/*int addressToRead;
+	for (int k = 0; k < elementsPerThread; k++){
+		addressToRead = tid*elementsPerThread + k;
+		if (addressToRead >= numberOfElements){
+			break;
+		}
+		else{
+			d_in_local[threadX*elementsPerThread + k] = d_in[addressToRead];
+		}
+		
+	}
+
+	__syncthreads();*/
 
 	for (int i = 0; i < numBins; i++){
 		gridAddress = (int*)((char*)d_threadBucketMatrix + i * pitch) + threadX;
@@ -355,26 +327,19 @@ __global__ void histogram_SeparateBuckets(const float* const d_in, int* d_thread
 	}
 	unsigned int bucket;
 	float pixelValue;
-//	int test = 0;
 	for (int i = 0; i < elementsPerThread; i++){
 		pixelToRead = threadX * elementsPerThread + i;
 		if (pixelToRead >= numberOfElements){
-			//d_test[threadX] = i;
 			return;
 		}
 		pixelValue = d_in[pixelToRead];
-		//bucket = floor((((float)(pixelValue - lumMin) / lumRange) * numBins));
-		/////
+		//pixelValue = d_in_local[pixelToRead];
+		
 		bucket = fminf(((unsigned int)(numBins - 1)), (unsigned int)((pixelValue - lumMin) / lumRange * numBins));
 
-		/*if (bucket > 1023){
-			bucket = 1023;
-		}*/
 		gridAddress = (int*)((char*)d_threadBucketMatrix + bucket * pitch) + threadX;
 		*gridAddress = *gridAddress + 1;
-		//test = i;
 	}
-	//d_test[threadX] = test;
 	return;
 }
 
@@ -385,13 +350,18 @@ __global__ void reduce_Minimum(float* d_in,
 	int numberOfBlocks,
 	float* d_out)
 {
+	extern __shared__ float d_in_local[];
+
 	int threadsPerBlock = blockDim.x;
 	int thisBlockId = blockIdx.x;
 	int threadIndex = threadIdx.x;
-	int vectorX = thisBlockId * threadsPerBlock + threadIndex;
-	if (vectorX > d_inSize){
+	int tid = thisBlockId * threadsPerBlock + threadIndex;
+	if (tid > d_inSize){
 		return;
 	}
+
+	d_in_local[threadIndex] = d_in[tid];
+	__syncthreads();
 
 	int elementsToProcess;
 	if (thisBlockId + 1 == numberOfBlocks){
@@ -405,7 +375,7 @@ __global__ void reduce_Minimum(float* d_in,
 	for (int s = elementsToProcess / 2; s > 0; s = s / 2){
 		if (threadIndex < s){
 			odd = elementsToProcess % 2;
-			d_in[vectorX] = fminf(d_in[vectorX], d_in[vectorX + s + odd]);
+			d_in[tid] = fminf(d_in[tid], d_in[tid + s + odd]);
 			elementsToProcess -= s;
 			if (s % 2 && elementsToProcess == 2){
 				s = 2;
@@ -416,7 +386,7 @@ __global__ void reduce_Minimum(float* d_in,
 	}
 
 	if (threadIndex == 0){
-		d_out[thisBlockId] = d_in[vectorX];
+		d_out[thisBlockId] = d_in[tid];
 	}
 
 	return;
@@ -428,14 +398,19 @@ __global__ void reduce_Maximum(float* d_in,
 	int numberOfBlocks,
 	float* d_out)
 {
+	extern __shared__ float d_in_local[];
+
 	int threadsPerBlock = blockDim.x;
 	int thisBlockId = blockIdx.x;
 	int threadIndex = threadIdx.x;
-	int vectorX = thisBlockId * threadsPerBlock + threadIndex;
-	if (vectorX > d_inSize){
+	int tid = thisBlockId * threadsPerBlock + threadIndex;
+	if (tid > d_inSize){
 		return;
 	}
 	
+	d_in_local[threadIndex] = d_in[tid];
+	__syncthreads();
+
 	int elementsToProcess;
 	if (thisBlockId + 1 == numberOfBlocks){
 		elementsToProcess = d_inSize % threadsPerBlock;
@@ -448,7 +423,7 @@ __global__ void reduce_Maximum(float* d_in,
 	for (int s = elementsToProcess / 2; s > 0; s = s/2){
 		if (threadIndex < s){
 			odd = elementsToProcess % 2;
-			d_in[vectorX] = fmaxf(d_in[vectorX], d_in[vectorX + s + odd]);
+			d_in[tid] = fmaxf(d_in[tid], d_in[tid + s + odd]);
 			elementsToProcess -= s;
 			if (s % 2 && elementsToProcess == 2){
 				s = 2;
@@ -459,7 +434,7 @@ __global__ void reduce_Maximum(float* d_in,
 	}
 
 	if (threadIndex == 0){
-		d_out[thisBlockId] = d_in[vectorX];
+		d_out[thisBlockId] = d_in[tid];
 	}
 
 	return;
