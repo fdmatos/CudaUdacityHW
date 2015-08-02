@@ -307,6 +307,9 @@ __global__ void histogram_SeparateBuckets(const float* const d_in, int* d_thread
 	int* gridAddress;
 	int tid = threadX + blockDim.x * blockIdx.x;
 
+	//por alguma razão, a cópia para memoria local não estava a funcionar aqui. 
+	//o codigo comentado abaixo seria a copia da memoria global para a local. 
+
 	/*int addressToRead;
 	for (int k = 0; k < elementsPerThread; k++){
 		addressToRead = tid*elementsPerThread + k;
