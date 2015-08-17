@@ -42,6 +42,23 @@
 
  */
 
+__global__ void checkBit(unsigned int* const d_inputVals, 
+							unsigned int mask, 
+							unsigned int value, 
+							const size_t numElems, 
+							unsigned int* d_vectorMask);
+
+__global__ void exclusiveScan(unsigned int* d_vectorMask,
+							const size_t numElems, 
+							unsigned int* d_scanResult);
+
+__global__ void switchPositions(unsigned int* d_scanResult1, 
+							unsigned int* d_scanResult2, 
+							unsigned int* const d_inputVals, 
+							unsigned int* const d_inputPos,
+							unsigned int* const d_outputVals, 
+							unsigned int* const d_outputPos, 
+							const size_t numElems);
 
 void your_sort(unsigned int* const d_inputVals,
                unsigned int* const d_inputPos,
@@ -49,6 +66,71 @@ void your_sort(unsigned int* const d_inputVals,
                unsigned int* const d_outputPos,
                const size_t numElems)
 { 
-  //TODO
-  //PUT YOUR SORT HERE
+	int nBits = 1; 
+	int nBins = 1 << nBits;
+	unsigned int mask;
+
+	unsigned int* d_vectorMask;
+	checkCudaErrors(cudaMalloc(&d_vectorMask, numElems * sizeof(unsigned int)));
+
+	int threadsPerBlock = 1024;
+	int numberOfBlocks = numElems / threadsPerBlock + 1;
+
+	for (int i = 0; i < 8 * sizeof(unsigned int); i += nBits){
+
+		mask = (nBins - 1) << i;
+		checkBit << <numberOfBlocks, threadsPerBlock >> >(d_inputVals, mask, 0, numElems, d_vectorMask);
+
+		
+
+
+
+
+
+
+	}
+
+	checkCudaErrors(cudaFree(d_vectorMask));
+}
+
+
+__global__ void checkBit(unsigned int* const d_inputVals,
+	unsigned int mask,
+	unsigned int value,
+	const size_t numElems,
+	unsigned int* d_vectorMask){
+
+	int tid = threadIdx.x + blockIdx.x * blockDim.x;
+	if (tid > numElems){
+		return;
+	}
+
+	unsigned int inputAndMask = d_inputVals[tid] & mask;
+	if (inputAndMask == value){
+		d_vectorMask[tid] = 1;
+	}
+	else{
+		d_vectorMask[tid] = 0;
+	}
+
+	return;
+}
+
+__global__ void exclusiveScan(unsigned int* d_vectorMask,
+	const size_t numElems,
+	unsigned int* d_scanResult){
+
+
+
+}
+
+__global__ void switchPositions(unsigned int* d_scanResult1,
+	unsigned int* d_scanResult2,
+	unsigned int* const d_inputVals,
+	unsigned int* const d_inputPos,
+	unsigned int* const d_outputVals,
+	unsigned int* const d_outputPos,
+	const size_t numElems){
+
+
 }
