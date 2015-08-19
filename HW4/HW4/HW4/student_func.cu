@@ -52,9 +52,19 @@ __global__ void exclusiveScan_Reduce(unsigned int* d_in,
 							const size_t numElems, 
 							unsigned int* d_exclusiveScanReduce_out);
 
-__global__ void exclusiveScan_Downsweep(unsigned int* d_in,
-										const size_t numElems,
-										unsigned int* d_exclusiveScanDownsweep_out);
+__global__ void exclusiveScan_Reduce_PhaseOne(unsigned int* d_scanAllElements,
+							const size_t elementsToProcess,
+							unsigned int* d_scanIntermediateElements);
+
+__global__ void exclusiveScan_Reduce_PhaseTwo(const size_t elementsToProcess,
+							unsigned int* d_scanIntermediateElements);
+
+__global__ void exclusiveScan_Downsweep_PhaseOne(const size_t elementsToProcess,
+							unsigned int* d_scanIntermediateElements);
+
+__global__ void exclusiveScan_Downsweep_PhaseTwo(unsigned int* d_scanAllElements,
+							const size_t elementsToProcess,
+							unsigned int* d_scanIntermediateElements);
 
 __global__ void switchPositions(unsigned int* d_scanResult1, 
 							unsigned int* d_scanResult2, 
@@ -86,42 +96,52 @@ void your_sort(unsigned int* const d_inputVals,
 	unsigned int* d_vectorMask;
 	checkCudaErrors(cudaMalloc(&d_vectorMask, totalThreads * sizeof(unsigned int)));
 
-	unsigned int* d_exclusive_scan_0_reduce_final;
-	unsigned int* d_exclusive_scan_1_reduce_final;
-	checkCudaErrors(cudaMalloc(&d_exclusive_scan_0_reduce_final, totalThreads * sizeof(unsigned int)));
-	checkCudaErrors(cudaMalloc(&d_exclusive_scan_1_reduce_final, totalThreads * sizeof(unsigned int)));
-
-	unsigned int* d_exclusive_scan_0_reduce_intermediate;
-	unsigned int* d_exclusive_scan_1_reduce_intermediate;
-	checkCudaErrors(cudaMalloc(&d_exclusive_scan_0_reduce_intermediate, totalThreads * sizeof(unsigned int)));
-	checkCudaErrors(cudaMalloc(&d_exclusive_scan_1_reduce_intermediate, totalThreads * sizeof(unsigned int)));
-
-	unsigned int* d_exclusive_scan_0_downsweep_final;
-	unsigned int* d_exclusive_scan_1_downsweep_final;
-	checkCudaErrors(cudaMalloc(&d_exclusive_scan_0_downsweep_final, totalThreads * sizeof(unsigned int)));
-	checkCudaErrors(cudaMalloc(&d_exclusive_scan_1_downsweep_final, totalThreads * sizeof(unsigned int)));
-
-	unsigned int* d_exclusive_scan_0_downsweep_intermediate;
-	unsigned int* d_exclusive_scan_1_downsweep_intermediate;
-	checkCudaErrors(cudaMalloc(&d_exclusive_scan_0_downsweep_intermediate, totalThreads * sizeof(unsigned int)));
-	checkCudaErrors(cudaMalloc(&d_exclusive_scan_1_downsweep_intermediate, totalThreads * sizeof(unsigned int)));
-	
 	ofstream myfile;
 	myfile.open("debug.txt");
 	mask = 1;
 	checkBit << <numberOfBlocks, threadsPerBlock >> >(d_inputVals, mask, 0, numElems, d_vectorMask);
-	exclusiveScan_Reduce << < numberOfBlocks, threadsPerBlock >> > (d_vectorMask, threadsPerBlock, d_exclusive_scan_0_intermediate);
-	exclusiveScan_Reduce << <1, numberOfBlocks >> >(d_exclusive_scan_0_intermediate, numberOfBlocks, d_exclusive_scan_0_final);
 
+	unsigned int* d_scanAllElements_0;
+	checkCudaErrors(cudaMalloc(&d_scanAllElements_0, totalThreads * sizeof(unsigned int)));
+	checkCudaErrors(cudaMemcpy(d_scanAllElements_0, d_vectorMask, totalThreads*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
+	unsigned int* d_scanIntermediateElements_0;
+	checkCudaErrors(cudaMalloc(&d_scanIntermediateElements_0, numberOfBlocks * sizeof(unsigned int)));
 
+	exclusiveScan_Reduce_PhaseOne << < numberOfBlocks, threadsPerBlock >> > (d_scanAllElements_0, threadsPerBlock, d_scanIntermediateElements_0);
+	exclusiveScan_Reduce_PhaseTwo << <1, numberOfBlocks >> >(numberOfBlocks, d_scanIntermediateElements_0);
 
-	unsigned int* h_exclusiveScanReduceResult = (unsigned int*)malloc(totalThreads * sizeof(unsigned int));
-	checkCudaErrors(cudaMemcpy(h_exclusiveScanReduceResult, d_exclusive_scan_0_reduce_final, totalThreads*sizeof(unsigned int), cudaMemcpyDeviceToHost));
+	exclusiveScan_Downsweep_PhaseOne << <1, numberOfBlocks >> > (numberOfBlocks, d_scanIntermediateElements_0);
+	exclusiveScan_Downsweep_PhaseTwo << <numberOfBlocks, threadsPerBlock >> >(d_scanAllElements_0, threadsPerBlock, d_scanIntermediateElements_0);
+
+	checkBit << <numberOfBlocks, threadsPerBlock >> >(d_inputVals, mask, 1, numElems, d_vectorMask);
+
+	/******************************************************************************/
+
+	unsigned int* d_scanAllElements_1;
+	checkCudaErrors(cudaMalloc(&d_scanAllElements_1, totalThreads * sizeof(unsigned int)));
+	checkCudaErrors(cudaMemcpy(d_scanAllElements_1, d_vectorMask, totalThreads*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
+	unsigned int* d_scanIntermediateElements_1;
+	checkCudaErrors(cudaMalloc(&d_scanIntermediateElements_1, numberOfBlocks * sizeof(unsigned int)));
+
+	exclusiveScan_Reduce_PhaseOne << < numberOfBlocks, threadsPerBlock >> > (d_scanAllElements_1, threadsPerBlock, d_scanIntermediateElements_1);
+	exclusiveScan_Reduce_PhaseTwo << <1, numberOfBlocks >> >(numberOfBlocks, d_scanIntermediateElements_1);
+
+	exclusiveScan_Downsweep_PhaseOne << <1, numberOfBlocks >> > (numberOfBlocks, d_scanIntermediateElements_1);
+	exclusiveScan_Downsweep_PhaseTwo << <numberOfBlocks, threadsPerBlock >> >(d_scanAllElements_1, threadsPerBlock, d_scanIntermediateElements_1);
+
+	/******************************************************************************/
+
+	unsigned int* h_exclusiveScanReduceResult_0 = (unsigned int*)malloc(totalThreads * sizeof(unsigned int));
+	checkCudaErrors(cudaMemcpy(h_exclusiveScanReduceResult_0, d_scanAllElements_0, totalThreads*sizeof(unsigned int), cudaMemcpyDeviceToHost));
+	unsigned int* h_exclusiveScanReduceResult_1 = (unsigned int*)malloc(totalThreads * sizeof(unsigned int));
+	checkCudaErrors(cudaMemcpy(h_exclusiveScanReduceResult_1, d_scanAllElements_1, totalThreads*sizeof(unsigned int), cudaMemcpyDeviceToHost));
 	for (int i = 0; i < totalThreads; ++i)
 	{
-		myfile << h_exclusiveScanReduceResult[i];
+		myfile << h_exclusiveScanReduceResult_0[i] << h_exclusiveScanReduceResult_1[i];
 		myfile << '\n';
 	}
+
+
 
 	/*for (int i = 0; i < 8 * sizeof(unsigned int); i += nBits){
 
@@ -138,18 +158,14 @@ void your_sort(unsigned int* const d_inputVals,
 
 	}*/
 
-	//myfile.close();
-	//free(h_exclusiveScanReduceResult);
-
+	myfile.close();
+	free(h_exclusiveScanReduceResult_0);
+	free(h_exclusiveScanReduceResult_1);
 	checkCudaErrors(cudaFree(d_vectorMask));
-	checkCudaErrors(cudaFree(d_exclusive_scan_0_reduce_final));
-	checkCudaErrors(cudaFree(d_exclusive_scan_1_reduce_final));
-	checkCudaErrors(cudaFree(d_exclusive_scan_0_reduce_intermediate));
-	checkCudaErrors(cudaFree(d_exclusive_scan_1_reduce_intermediate));
-	checkCudaErrors(cudaFree(d_exclusive_scan_0_downsweep_final));
-	checkCudaErrors(cudaFree(d_exclusive_scan_1_downsweep_final));
-	checkCudaErrors(cudaFree(d_exclusive_scan_0_downsweep_intermediate));
-	checkCudaErrors(cudaFree(d_exclusive_scan_1_downsweep_intermediate));
+	checkCudaErrors(cudaFree(d_scanAllElements_0));
+	checkCudaErrors(cudaFree(d_scanIntermediateElements_0));
+	checkCudaErrors(cudaFree(d_scanAllElements_1));
+	checkCudaErrors(cudaFree(d_scanIntermediateElements_1));
 }
 
 
@@ -178,31 +194,92 @@ __global__ void checkBit(unsigned int* const d_inputVals,
 	return;
 }
 
-__global__ void exclusiveScan_Reduce(unsigned int* d_in,
-	const size_t elementsToProcess,
-	unsigned int* d_exclusiveScanReduce_out){
+__global__ void exclusiveScan_Reduce_PhaseOne(unsigned int* d_scanAllElements,
+											const size_t elementsToProcess,
+											unsigned int* d_scanIntermediateElements){
 
-	int tid = threadIdx.x + blockDim.x * blockIdx.x;
 	int threadX = threadIdx.x;
-	d_exclusiveScanReduce_out[tid] = d_in[tid];
-
-	__syncthreads();
+	int tid = threadX + blockDim.x * blockIdx.x;
+	
 
 	for (int s = 1, mod = 2; s <= elementsToProcess / 2; s = s * 2, mod = mod * 2){
 		if ((threadX + 1) % mod == 0){
-			d_exclusiveScanReduce_out[tid] = d_exclusiveScanReduce_out[tid] + d_exclusiveScanReduce_out[tid - s];
+			d_scanAllElements[tid] = d_scanAllElements[tid] + d_scanAllElements[tid - s];
 		}
 		__syncthreads();
 	}
 
+	if (threadX == 1023){
+		d_scanIntermediateElements[blockIdx.x] = d_scanAllElements[tid];
+	}
 	__syncthreads();
 	return;
 
 }
 
-__global__ void exclusiveScan_Downsweep(unsigned int* d_in, const size_t numElems, unsigned int* d_exclusiveScanDownsweep_out){
+__global__ void exclusiveScan_Reduce_PhaseTwo(const size_t elementsToProcess,
+											unsigned int* d_scanIntermediateElements){
+
+	int threadX = threadIdx.x;
+	int tid = threadX + blockDim.x * blockIdx.x;
+
+	for (int s = 1, mod = 2; s <= elementsToProcess / 2; s = s * 2, mod = mod * 2){
+		if ((threadX + 1) % mod == 0){
+			d_scanIntermediateElements[tid] = d_scanIntermediateElements[tid] + d_scanIntermediateElements[tid - s];
+		}
+		__syncthreads();
+	}
+	return;
+
+}
+
+
+
+__global__ void exclusiveScan_Downsweep_PhaseOne(const size_t elementsToProcess,
+											unsigned int* d_scanIntermediateElements){
 	// cada thread que entrar aqui, seja na primeira ou na segunda passagem: o seu valor inicial tem que ser igual ao valor
 	//que se encontra na sua posição no vector intermedio. 
+	int threadX = threadIdx.x;
+	int tid = threadX + blockDim.x * blockIdx.x;
+	if (threadX == 255){
+		d_scanIntermediateElements[255] = 0;
+	}
+
+	__syncthreads();
+	//fase de downsweep
+	int auxiliary;
+	for (int s = elementsToProcess / 2, mod = elementsToProcess; s > 0; s = s / 2, mod = mod / 2){
+		if ((threadX + 1) % mod == 0){
+			auxiliary = d_scanIntermediateElements[tid - s];
+			d_scanIntermediateElements[tid - s] = d_scanIntermediateElements[tid];
+			d_scanIntermediateElements[tid] = d_scanIntermediateElements[tid] + auxiliary;
+		}
+		__syncthreads();
+	}
+	return;
+}
+
+__global__ void exclusiveScan_Downsweep_PhaseTwo(unsigned int* d_scanAllElements,
+												const size_t elementsToProcess,
+												unsigned int* d_scanIntermediateElements){
+	int threadX = threadIdx.x;
+	int tid = threadX + blockDim.x * blockIdx.x;
+	if (threadX == 1023){
+		d_scanAllElements[tid] = d_scanIntermediateElements[blockIdx.x];
+	}
+
+	__syncthreads();
+	//fase de downsweep
+	int auxiliary;
+	for (int s = elementsToProcess / 2, mod = elementsToProcess; s > 0; s = s / 2, mod = mod / 2){
+		if ((threadX + 1) % mod == 0){
+			auxiliary = d_scanAllElements[tid - s];
+			d_scanAllElements[tid - s] = d_scanAllElements[tid];
+			d_scanAllElements[tid] = d_scanAllElements[tid] + auxiliary;
+		}
+		__syncthreads();
+	}
+	return;
 }
 
 __global__ void switchPositions(unsigned int* d_scanResult1,
