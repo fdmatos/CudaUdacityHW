@@ -1,6 +1,9 @@
 #include <algorithm>
 // For memset
 #include <cstring>
+#include <iostream>
+#include <fstream>
+using namespace std;
 
 void reference_calculation(unsigned int* inputVals,
                            unsigned int* inputPos,
@@ -20,8 +23,16 @@ void reference_calculation(unsigned int* inputVals,
   unsigned int *vals_dst = outputVals;
   unsigned int *pos_dst  = outputPos;
 
+  ofstream file;
+  file.open("ok.txt");
+
+  //for (int k = 0; k < numElems; ++k){
+	 // file << inputVals[k] << ' ' << k << ' ' << inputPos[k] << '\n';
+  //}
+
   //a simple radix sort - only guaranteed to work for numBits that are multiples of 2
   for (unsigned int i = 0; i < 8 * sizeof(unsigned int); i += numBits) {
+	//for (unsigned int i = 0; i < 1; i += numBits) {
     unsigned int mask = (numBins - 1) << i;
 
     memset(binHistogram, 0, sizeof(unsigned int) * numBins); //zero out the bins
@@ -51,12 +62,19 @@ void reference_calculation(unsigned int* inputVals,
     //swap the buffers (pointers only)
     std::swap(vals_dst, vals_src);
     std::swap(pos_dst, pos_src);
+
+	for (int k = 0; k < numElems; ++k){
+		file << vals_src[k] << ' ' << k << ' ' << pos_src[k] << '\n';
+	}
+
+	//file << binScan[0] << " bin scan " << binScan[1];
+
   }
 
   //we did an even number of iterations, need to copy from input buffer into output
   std::copy(inputVals, inputVals + numElems, outputVals);
   std::copy(inputPos, inputPos + numElems, outputPos);
-
+  file.close();
   delete[] binHistogram;
   delete[] binScan;
 }

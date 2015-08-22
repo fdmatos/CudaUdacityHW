@@ -80,6 +80,9 @@ __global__ void switchPositions(unsigned int* d_scanResult0,
 
 __global__ void test();
 
+void printInputVals(){
+
+}
 
 
 void your_sort(unsigned int* const d_inputVals,
@@ -113,8 +116,18 @@ void your_sort(unsigned int* const d_inputVals,
 	unsigned int *d_vals_src = d_inputVals;
 	unsigned int *d_pos_src = d_inputPos;
 
+	/*checkCudaErrors(cudaMalloc(&d_vals_src, numElems * sizeof(unsigned int)));
+	checkCudaErrors(cudaMalloc(&d_pos_src, numElems * sizeof(unsigned int)));
+	checkCudaErrors(cudaMemcpy(d_vals_src, d_inputVals, numElems*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
+	checkCudaErrors(cudaMemcpy(d_pos_src, d_inputPos, numElems*sizeof(unsigned int), cudaMemcpyDeviceToDevice));*/
+
 	unsigned int *d_vals_dst = d_outputVals;
 	unsigned int *d_pos_dst = d_outputPos;
+
+	/*checkCudaErrors(cudaMalloc(&d_vals_dst, numElems * sizeof(unsigned int)));
+	checkCudaErrors(cudaMalloc(&d_pos_dst, numElems * sizeof(unsigned int)));
+	checkCudaErrors(cudaMemcpy(d_vals_dst, d_outputVals, numElems*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
+	checkCudaErrors(cudaMemcpy(d_pos_dst, d_outputPos, numElems*sizeof(unsigned int), cudaMemcpyDeviceToDevice));*/
 
 	unsigned int* d_vectorMask;
 	checkCudaErrors(cudaMalloc(&d_vectorMask, totalThreads * sizeof(unsigned int)));
@@ -123,10 +136,13 @@ void your_sort(unsigned int* const d_inputVals,
 	ofstream myfile, myfile2;
 	myfile.open("debug.txt");
 	myfile2.open("debug2.txt");
-	unsigned int* h_exclusiveScanReduceResult_0 = (unsigned int*)malloc(totalThreads*sizeof(unsigned int));
-	unsigned int* h_exclusiveScanReduceResult_1 = (unsigned int*)malloc(totalThreads*sizeof(unsigned int));
+	unsigned int* h_test_0 = (unsigned int*)malloc(totalThreads*sizeof(unsigned int));
+	unsigned int* h_test_1 = (unsigned int*)malloc(totalThreads*sizeof(unsigned int));
+	unsigned int* h_test_2 = (unsigned int*)malloc(numElems*sizeof(unsigned int));
+	unsigned int* h_test_3 = (unsigned int*)malloc(numElems*sizeof(unsigned int));
+
 	for (int i = 0; i < 8 * sizeof(unsigned int); i += nBits){
-		
+	//for (int i = 0; i <1; i += nBits){
 		mask = (nBins - 1) << i;
 
 		checkBit << <numberOfBlocks, threadsPerBlock >> >(d_vals_src, mask, 0, numElems, d_vectorMask);
@@ -143,7 +159,7 @@ void your_sort(unsigned int* const d_inputVals,
 
 		/******************************************************************************/
 
-		checkBit << <numberOfBlocks, threadsPerBlock >> >(d_vals_src, mask, 1, numElems, d_vectorMask);
+		checkBit << <numberOfBlocks, threadsPerBlock >> >(d_vals_src, mask, 1<<i, numElems, d_vectorMask);
 
 		checkCudaErrors(cudaMemcpy(d_scanAllElements_1, d_vectorMask, totalThreads*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
 
@@ -157,26 +173,37 @@ void your_sort(unsigned int* const d_inputVals,
 		switchPositions << <numberOfBlocks, threadsPerBlock >> >(d_scanAllElements_0, d_scanAllElements_1, d_vals_src, d_pos_src, d_vals_dst, d_pos_dst, numElems, mask);
 
 		
-		checkCudaErrors(cudaMemcpy(h_exclusiveScanReduceResult_0, d_scanAllElements_0, totalThreads*sizeof(unsigned int), cudaMemcpyDeviceToHost));
-		checkCudaErrors(cudaMemcpy(h_exclusiveScanReduceResult_1, d_scanAllElements_1, totalThreads*sizeof(unsigned int), cudaMemcpyDeviceToHost));
-		for (int i = 0; i < numElems; ++i)
+		checkCudaErrors(cudaMemcpy(h_test_0, d_scanAllElements_0, totalThreads*sizeof(unsigned int), cudaMemcpyDeviceToHost));
+		checkCudaErrors(cudaMemcpy(h_test_1, d_scanAllElements_1, totalThreads*sizeof(unsigned int), cudaMemcpyDeviceToHost));
+		/*for (int j = 0; j < numElems; ++j)
 		{
-			myfile << h_exclusiveScanReduceResult_0[i] << ' ' << h_exclusiveScanReduceResult_1[i];
+			myfile << h_test_0[j] << ' ' << h_test_1[j];
 			myfile << '\n';
 		}
+		myfile << "\n\n\n\n\n\n\n\n\n\n";*/
+
 		std::swap(d_vals_src, d_vals_dst);
 		std::swap(d_pos_src, d_pos_dst);
-
-		myfile << "\n\n\n\n\n\n\n\n\n\n";
-		
 	}
 	checkCudaErrors(cudaMemcpy(d_outputVals, d_vals_src, numElems*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
 	checkCudaErrors(cudaMemcpy(d_outputPos, d_pos_src, numElems*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
 
+	checkCudaErrors(cudaMemcpy(h_test_2, d_vals_src, numElems*sizeof(unsigned int), cudaMemcpyDeviceToHost));
+	checkCudaErrors(cudaMemcpy(h_test_3, d_pos_src, numElems*sizeof(unsigned int), cudaMemcpyDeviceToHost));
+	/*for (int k = 0; k < numElems; ++k){
+		myfile2 << h_test_2[k] << ' ' << k << ' ' << h_test_3[k] << '\n';
+	}*/
+	
+	//for (int k = 0; k < numElems; ++k){
+	//	myfile2 << h_test_2[k] << ' ' << k << ' ' << h_test_3[k] << '\n';
+	//}
+
 	myfile.close();
 	myfile2.close();
-	free(h_exclusiveScanReduceResult_0);
-	free(h_exclusiveScanReduceResult_1);
+	free(h_test_0);
+	free(h_test_1);
+	free(h_test_2);
+	free(h_test_3);
 	checkCudaErrors(cudaFree(d_vectorMask));
 	checkCudaErrors(cudaFree(d_scanAllElements_0));
 	checkCudaErrors(cudaFree(d_scanIntermediateElements_0));
@@ -312,12 +339,12 @@ __global__ void switchPositions(unsigned int* d_scanResult0,
 
 	int threadX = threadIdx.x;
 	int tid = threadX + blockDim.x * blockIdx.x;
-	int total = 1024 * 256 - 1;
+	int total = numElems - 1;
 	if (tid >= numElems){
 		return;
 	}
 
-	if (d_inputVals[tid] & mask == 0){
+	if ((d_inputVals[tid] & mask) == 0){
 		d_outputVals[d_scanResult0[tid]] = d_inputVals[tid];
 		d_outputPos[d_scanResult0[tid]] = d_inputPos[tid];
 	}
@@ -325,5 +352,5 @@ __global__ void switchPositions(unsigned int* d_scanResult0,
 		d_outputVals[total - d_scanResult1[tid]] = d_inputVals[tid];
 		d_outputPos[total - d_scanResult1[tid]] = d_inputPos[tid];
 	}
-
+	return;
 }
