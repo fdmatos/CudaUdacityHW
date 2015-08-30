@@ -97,5 +97,11 @@ int main(void)
   cudaFree(d_vals);
   cudaFree(d_histo);
 
+  cudaError_t cudaStatus;
+  cudaStatus = cudaDeviceReset();
+  if (cudaStatus != cudaSuccess) {
+	  fprintf(stderr, "cudaDeviceReset failed!");
+	  return 1;
+  }
   return 0;
 }
