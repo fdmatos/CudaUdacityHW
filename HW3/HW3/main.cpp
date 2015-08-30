@@ -9,7 +9,7 @@
 
 #include "compare.h"
 #include "reference_calc.h"
-
+#include "device_launch_parameters.h"
 // Functions from HW3.cu
 void preProcess(float **d_luminance, unsigned int **d_cdf,
                 size_t *numRows, size_t *numCols, unsigned int *numBins,
@@ -118,6 +118,11 @@ int main(int argc, char **argv) {
   cleanupGlobalMemory();
 
   compareImages(reference_file, output_file, useEpsCheck, perPixelError, globalError);
-
-  return 0;
+  cudaError_t cudaStatus;
+  cudaStatus = cudaDeviceReset();
+  if (cudaStatus != cudaSuccess) {
+	  fprintf(stderr, "cudaDeviceReset failed!");
+	  return 1;
+  }
+  return 0; 
 }
